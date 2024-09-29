@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 if [ $# -ne 2 ]; then
     printf "Usage ./finder.sh <filesdir> <searchstr>\n"
