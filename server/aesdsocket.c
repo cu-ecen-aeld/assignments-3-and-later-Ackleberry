@@ -20,7 +20,6 @@
 #define BACKLOG 10	 // how many pending connections queue will hold
 #define FILENAME "/var/tmp/aesdsocketdata"
 #define INITIAL_RX_BUF_SIZE 256
-#define BUFFER_GROWTH_FACTOR 2
 
 int _sockfd = -1;
 
@@ -44,38 +43,37 @@ void _send_file(int client_socket, const char *filepath) {
 }
 
 char *_receive_message(int client_socket) {
-    size_t buffer_size = INITIAL_RX_BUF_SIZE;
-    size_t total_bytes_received = 0;
-    ssize_t bytes_received;
+    size_t buf_size = INITIAL_RX_BUF_SIZE;
+    size_t total_rx_bytes = 0;
+    ssize_t rx_bytes;
 
     char *buffer = malloc(INITIAL_RX_BUF_SIZE);
     if (!buffer) {
-        perror("Failed to allocate initial buffer");
+		syslog(LOG_ERR, "Failed to allocate message buffer\n");
         return NULL;
     }
 
     while (1) {
-        bytes_received = recv(client_socket, buffer + total_bytes_received, 
-                              buffer_size - total_bytes_received, 0);
+        rx_bytes = recv(client_socket, buffer + total_rx_bytes, buf_size - total_rx_bytes, 0);
         
-        if (bytes_received <= 0) {
+        if (rx_bytes <= 0) {
             free(buffer);
-            return NULL;  // Error or connection closed
+            return NULL;
         }
 
-        total_bytes_received += bytes_received;
+        total_rx_bytes += rx_bytes;
 
-        // Check if we've received a newline
-        if (memchr(buffer + total_bytes_received - bytes_received, '\n', bytes_received)) {
-            break;  // Found newline, message complete
+        // Did we get a newline?
+        if (memchr(buffer + total_rx_bytes - rx_bytes, '\n', rx_bytes)) {
+            break;
         }
 
         // If buffer is full, expand it
-        if (total_bytes_received == buffer_size) {
-            buffer_size *= BUFFER_GROWTH_FACTOR;
-            char* new_buffer = realloc(buffer, buffer_size);
+        if (total_rx_bytes == buf_size) {
+            buf_size *= 2; // Double the size of the buffer
+            char* new_buffer = realloc(buffer, buf_size);
             if (!new_buffer) {
-                perror("Failed to reallocate buffer");
+				syslog(LOG_ERR, "Failed to reallocate message buffer\n");
                 free(buffer);
                 return NULL;
             }
@@ -83,27 +81,25 @@ char *_receive_message(int client_socket) {
         }
     }
 
-    // Null-terminate the string
-    buffer[total_bytes_received] = '\0';
-
+    buffer[total_rx_bytes] = '\0';
     return buffer;
 }
 
 int _append_str_to_file(const char *str, const char *filename) {
     FILE *file = fopen(filename, "a");
     if (file == NULL) {
-        perror("Failed to open file");
+		syslog(LOG_ERR, "Failed to open file '%s'", filename);
         return -1;
     }
 
     if (fputs(str, file) == EOF) {
-        perror("Failed to write to file");
+		syslog(LOG_ERR, "Failed to write to file '%s'", filename);
         fclose(file);
         return -1;
     }
 
     if (fclose(file) != 0) {
-        perror("Failed to close file");
+		syslog(LOG_ERR, "Failed to close file '%s'", filename);
         return -1;
     }
 
@@ -139,7 +135,6 @@ static void *_get_in_addr(struct sockaddr *sa)
 
 void _sig_handler(int sig)
 {
-    // waitpid() might overwrite errno, so we save and restore it:
     int saved_errno = errno;
 
 	if (sig == SIGINT || sig == SIGTERM) {
@@ -217,7 +212,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (listen(_sockfd, BACKLOG) == -1) {
-		perror("listen");
+		syslog(LOG_ERR, "listen() failed!");
 		return -1;
 	}
 
@@ -238,7 +233,6 @@ int main(int argc, char *argv[])
     }
 
 	remove(FILENAME);
-
 	syslog(LOG_DEBUG, "Listening for a new connection...");
 
 	while (1) {
@@ -246,7 +240,6 @@ int main(int argc, char *argv[])
 		int client_fd = accept(_sockfd, (struct sockaddr *)&their_addr, &sin_size);
 		if (client_fd < 0) {
 			syslog(LOG_ERR, "Failed to accept client connection.");
-			perror("accept");
 			continue;
 		}
 
