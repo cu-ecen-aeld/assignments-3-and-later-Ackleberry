@@ -16,11 +16,16 @@
 #include <syslog.h>
 #include <stdbool.h>
 #include "queue.h"
+#include <pthread.h>
+#include <time.h>
 
 #define PORT "9000"  // the port users will be connecting to
 #define BACKLOG 10	 // how many pending connections queue will hold
+
 #define FILENAME "/var/tmp/aesdsocketdata"
 #define INITIAL_RX_BUF_SIZE 256
+
+static pthread_mutex_t _file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct client_info_s {
     int fd;
@@ -100,23 +105,29 @@ char *_receive_message(int client_socket) {
 }
 
 int _append_str_to_file(const char *str, const char *filename) {
+    pthread_mutex_lock(&_file_mutex);
+
     FILE *file = fopen(filename, "a");
     if (file == NULL) {
         syslog(LOG_ERR, "Failed to open file '%s'", filename);
+        pthread_mutex_unlock(&_file_mutex);
         return -1;
     }
 
     if (fputs(str, file) == EOF) {
         syslog(LOG_ERR, "Failed to write to file '%s'", filename);
         fclose(file);
+        pthread_mutex_unlock(&_file_mutex);
         return -1;
     }
 
     if (fclose(file) != 0) {
         syslog(LOG_ERR, "Failed to close file '%s'", filename);
+        pthread_mutex_unlock(&_file_mutex);
         return -1;
     }
 
+    pthread_mutex_unlock(&_file_mutex);
     return 0;
 }
 
@@ -164,6 +175,29 @@ void _sig_handler(int sig)
     exit(0);
 }
 
+static void _timer_thread(union sigval sigval)
+{
+    (void)sigval;
+
+    time_t t = time(NULL);
+    struct tm *tm_ptr = localtime(&t);
+    if (tm_ptr == NULL) {
+        fprintf(stderr, "Local time error.\n");
+        return;
+    }
+
+    char time_msg[128] = "";
+    if (strftime(time_msg, sizeof(time_msg), "timestamp:%a, %d %b %Y %T %z\n", tm_ptr) == 0) {
+        fprintf(stderr, "strftime returned 0.\n");
+        return;
+    }
+
+    if (_append_str_to_file(time_msg, FILENAME)) {
+        fprintf(stderr, "Failed to append to file.\n");
+        return;
+    }
+}
+
 int main(int argc, char *argv[])
 {
     int rv;
@@ -172,6 +206,32 @@ int main(int argc, char *argv[])
     if ((argc == 2) && (strcmp(argv[1], "-d") == 0)) {
         printf("Running server as daemon...\n");
         is_daemon = true;
+    }
+
+    if (pthread_mutex_init(&_file_mutex, NULL) != 0) {
+        fprintf(stderr, "Error %d (%s) initializing thread mutex!\n", errno, strerror(errno));
+        return -1;
+    }
+
+    timer_t timerid;
+    struct sigevent sev;
+    int clock_id = CLOCK_MONOTONIC;
+    memset(&sev, 0, sizeof(struct sigevent));
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_value.sival_ptr = &timerid;
+    sev.sigev_notify_function = _timer_thread;
+
+    if (timer_create(clock_id, &sev, &timerid) != 0) {
+        printf("Error %d (%s) creating timer!\n", errno, strerror(errno));
+    }
+
+    struct itimerspec its = {
+        .it_value.tv_sec = 10, .it_value.tv_nsec = 0,
+        .it_interval.tv_sec = 10, .it_interval.tv_nsec = 0
+    };
+
+    if (timer_settime(timerid, 0, &its, NULL) != 0) {
+        printf("Error %d (%s) arming timer!\n", errno, strerror(errno));
     }
 
     // Hints suggests restrictions on what getaddrinfo() structs are returned.
@@ -251,7 +311,7 @@ int main(int argc, char *argv[])
     SLIST_HEAD(slisthead, slist_data_s) head;
     SLIST_INIT(&head);
 
-    while (1) {
+    while (_sockfd != -1) {
         struct sockaddr_storage client_addr;
         socklen_t addr_size = sizeof(client_addr);
         int client_fd = accept(_sockfd, (struct sockaddr *)&client_addr, &addr_size);
@@ -296,7 +356,23 @@ int main(int argc, char *argv[])
                 free(iter);
             }
         }
+    }
 
+    // Ensure all threads have completed and free up resources
+    struct slist_data_s *iter, *tmp = NULL;
+    SLIST_FOREACH_SAFE(iter, &head, entries, tmp) {
+        if (iter->c_info->is_complete) {
+            close(iter->c_info->fd);
+            syslog(LOG_DEBUG, "Closed connection from %s", iter->c_info->addr_str);
+            pthread_join(iter->c_info->t_id, NULL);
+            SLIST_REMOVE(&head, iter, slist_data_s, entries);
+            free(iter->c_info);
+            free(iter);
+        }
+    }
+
+    if (timer_delete(timerid) != 0) {
+        printf("Error %d (%s) deleting timer!\n", errno, strerror(errno));
     }
 
     close(_sockfd);
