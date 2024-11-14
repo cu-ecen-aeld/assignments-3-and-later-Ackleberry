@@ -213,27 +213,6 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    timer_t timerid;
-    struct sigevent sev;
-    int clock_id = CLOCK_MONOTONIC;
-    memset(&sev, 0, sizeof(struct sigevent));
-    sev.sigev_notify = SIGEV_THREAD;
-    sev.sigev_value.sival_ptr = &timerid;
-    sev.sigev_notify_function = _timer_thread;
-
-    if (timer_create(clock_id, &sev, &timerid) != 0) {
-        printf("Error %d (%s) creating timer!\n", errno, strerror(errno));
-    }
-
-    struct itimerspec its = {
-        .it_value.tv_sec = 10, .it_value.tv_nsec = 0,
-        .it_interval.tv_sec = 10, .it_interval.tv_nsec = 0
-    };
-
-    if (timer_settime(timerid, 0, &its, NULL) != 0) {
-        printf("Error %d (%s) arming timer!\n", errno, strerror(errno));
-    }
-
     // Hints suggests restrictions on what getaddrinfo() structs are returned.
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -290,10 +269,34 @@ int main(int argc, char *argv[])
     }
 
     if (is_daemon) {
-        if (daemon(0, 0) == -1) {
+        if (daemon(0, 1) == -1) {
             syslog(LOG_ERR, "Failed to launch daemon!");
             return -1;
         }
+    }
+
+    // Create timer after daemon since they are not preserved if called before dawmon()
+    timer_t timerid;
+    struct sigevent sev;
+    memset(&sev, 0, sizeof(struct sigevent));
+    sev.sigev_notify = SIGEV_THREAD;
+    sev.sigev_notify_function = _timer_thread;
+    sev.sigev_notify_attributes = NULL;
+
+    if (timer_create(CLOCK_MONOTONIC, &sev, &timerid) != 0) {
+        printf("Error %d (%s) creating timer!\n", errno, strerror(errno));
+    }
+
+    struct itimerspec its;
+    its.it_value.tv_sec = 0;
+    its.it_value.tv_nsec = 1;
+    its.it_interval.tv_sec = 10;
+    its.it_interval.tv_nsec = 0;
+
+    if (timer_settime(timerid, 0, &its, NULL) != 0) {
+        printf("Error %d (%s) arming timer!\n", errno, strerror(errno));
+        timer_delete(timerid);
+        return -1;
     }
 
     struct sigaction sa;
