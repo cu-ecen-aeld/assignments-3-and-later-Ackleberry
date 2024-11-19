@@ -1,5 +1,6 @@
 CC ?= $(CROSS_COMPILE)gcc
-CFLAGS += -Wall -Wextra -g
+CFLAGS ?= -Wall -Wextra -g
+LDFLAGS ?= -pthread -lrt
 
 all: aesdsocket
 
