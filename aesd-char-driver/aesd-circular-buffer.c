@@ -32,9 +32,9 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
             size_t char_offset, size_t *entry_offset_byte_rtn)
 {
     struct aesd_buffer_entry *result = NULL;
+    const size_t max = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
 
     /* Search for the entry */
-    const size_t max = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
     size_t char_pos = char_offset;
     uint8_t entry_pos = buffer->out_offs;
     while (char_pos >= buffer->entry[entry_pos % max].size) {
@@ -43,8 +43,8 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
     }
 
     /* If entry position is less than the max entries plus the buffer out offset then its valid */
-    /* Outerwise the offset they're asking for is too high and wraps over earlier data */
-    if (entry_pos < (max + buffer->out_offs)) {
+    /* Otherwise the offset they're asking for is too high and wraps over earlier data */
+    if (entry_pos < (buffer->out_offs + max)) {
         result = &buffer->entry[entry_pos % max];
         if (entry_offset_byte_rtn != NULL) {
             *entry_offset_byte_rtn = char_pos;
