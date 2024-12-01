@@ -13,14 +13,14 @@
 #undef PDEBUG             /* undef it, just in case */
 #ifdef AESD_DEBUG
 #  ifdef __KERNEL__
-     /* This one if debugging is on, and kernel space */
+     /* Kernel debugging */
 #    define PDEBUG(fmt, args...) printk( KERN_DEBUG "aesdchar: " fmt, ## args)
 #  else
-     /* This one for user space */
+     /* Userspace debugging */
 #    define PDEBUG(fmt, args...) fprintf(stderr, fmt, ## args)
 #  endif
 #else
-#  define PDEBUG(fmt, args...) /* not debugging: nothing */
+#  define PDEBUG(fmt, args...) /* Debug disabled */
 #endif
 
 struct aesd_dev
