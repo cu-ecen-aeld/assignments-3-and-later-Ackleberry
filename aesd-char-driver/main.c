@@ -53,22 +53,19 @@ int aesd_release(struct inode *inode, struct file *filp)
     return 0;
 }
 
-ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
-                loff_t *f_pos)
+ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_pos)
 {
     ssize_t retval = 0;
     struct aesd_dev *dev = filp->private_data;
     struct aesd_buffer_entry *entry;
-    size_t entry_offset = 0;
     size_t offset_out = 0;
 
     PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
 
-    if (*f_pos != 0) {
+    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circbuf, *f_pos, &offset_out);
+    if (entry == NULL) {
         return 0;
     }
-
-    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circbuf, entry_offset, &offset_out);
     PDEBUG("Reading %zu bytes. Value: '%s'", entry->size, entry->buffptr);
 	if (copy_to_user(buf, entry->buffptr, entry->size)) {
 		retval = -EFAULT;
@@ -79,8 +76,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     return retval;
 }
 
-ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
-                loff_t *f_pos)
+ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
     struct aesd_dev *dev = filp->private_data;
@@ -125,7 +121,7 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
     cdev_init(&dev->cdev, &aesd_fops);
     dev->cdev.owner = THIS_MODULE;
     dev->cdev.ops = &aesd_fops;
-    err = cdev_add (&dev->cdev, devno, 1);
+    err = cdev_add(&dev->cdev, devno, 1);
     if (err) {
         printk(KERN_ERR "Error %d adding aesd cdev", err);
     }
