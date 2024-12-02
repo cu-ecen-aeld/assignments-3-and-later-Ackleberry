@@ -59,11 +59,15 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
 * new start location.
 * Any necessary locking must be handled by the caller
 * Any memory referenced in @param add_entry must be allocated by and/or must have a lifetime managed by the caller.
+* @return pointer to the entry that was replaced. NULL if no entry was replaced. Used for freeing a malloc'd entry.
 * @note: The tests expect entry.size to be string LENGTH not SIZE.
 */
-void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
+const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const struct aesd_buffer_entry *add_entry)
 {
+    const char* ret = NULL;
     if (buffer->full) {
+        ret = buffer->entry[buffer->out_offs].buffptr;
+        
         buffer->entry[buffer->in_offs].buffptr = add_entry->buffptr;
         buffer->entry[buffer->in_offs].size = add_entry->size;
         buffer->in_offs++;
@@ -80,6 +84,8 @@ void aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, const s
             buffer->full = true;
         }
     }
+
+    return ret;
 }
 
 /**
