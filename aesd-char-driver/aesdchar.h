@@ -8,13 +8,15 @@
 #ifndef AESD_CHAR_DRIVER_AESDCHAR_H_
 #define AESD_CHAR_DRIVER_AESDCHAR_H_
 
+#include "aesd-circular-buffer.h"
+
 #define AESD_DEBUG 1  //Remove comment on this line to enable debug
 
 #undef PDEBUG             /* undef it, just in case */
 #ifdef AESD_DEBUG
 #  ifdef __KERNEL__
      /* Kernel debugging */
-#    define PDEBUG(fmt, args...) printk( KERN_DEBUG "aesdchar: " fmt, ## args)
+#    define PDEBUG(fmt, args...) printk(KERN_DEBUG "aesdchar: " fmt, ## args)
 #  else
      /* Userspace debugging */
 #    define PDEBUG(fmt, args...) fprintf(stderr, fmt, ## args)
@@ -28,6 +30,7 @@ struct aesd_dev
     /**
      * TODO: Add structure(s) and locks needed to complete assignment requirements
      */
+    struct aesd_circular_buffer circbuf;
     struct cdev cdev;     /* Char device structure      */
 };
 

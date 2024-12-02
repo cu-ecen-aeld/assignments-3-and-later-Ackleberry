@@ -18,6 +18,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -28,10 +29,18 @@ struct aesd_dev aesd_device;
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
+    struct aesd_dev *dev;
+
     PDEBUG("open");
     /**
      * TODO: handle open
      */
+
+    /* inode->i_cdev points to cdev in aesd_device object. By giving the struct and member we can 
+       find the base address of this object. */
+    dev = container_of(inode->i_cdev, struct aesd_dev, cdev);
+    filp->private_data = dev; /* For other methods */
+
     return 0;
 }
 
@@ -48,10 +57,25 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = 0;
-    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle read
-     */
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_buffer_entry *entry;
+    size_t entry_offset = 0;
+    size_t offset_out = 0;
+
+    PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
+
+    if (*f_pos != 0) {
+        return 0;
+    }
+
+    entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circbuf, entry_offset, &offset_out);
+    PDEBUG("Reading %zu bytes. Value: '%s'", entry->size, entry->buffptr);
+	if (copy_to_user(buf, entry->buffptr, entry->size)) {
+		retval = -EFAULT;
+	}
+    *f_pos += entry->size;
+    retval = entry->size;
+
     return retval;
 }
 
@@ -59,10 +83,31 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_buffer_entry *entry_ptr;
+    char *entry_buf;
+    PDEBUG("write %zu bytes with offset %lld. Value: '%s'", count, *f_pos, buf);
     /**
      * TODO: handle write
      */
+
+    // Allocate kernel memory to hold the user data
+    entry_buf = kmalloc(count, GFP_KERNEL);
+    if (!entry_buf)
+        return -ENOMEM;
+
+    // Copy data from user space to kernel space
+    if (copy_from_user(entry_buf, buf, count)) {
+        kfree(entry_buf);
+        return -EFAULT;
+    }
+
+    entry_ptr = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
+    entry_ptr->buffptr = entry_buf;
+    entry_ptr->size = count;
+    aesd_circular_buffer_add_entry(&dev->circbuf, entry_ptr);
+    retval = count;
+
     return retval;
 }
 struct file_operations aesd_fops = {
@@ -92,23 +137,21 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
 int aesd_init_module(void)
 {
     dev_t dev = 0;
-    int result;
-    result = alloc_chrdev_region(&dev, aesd_minor, 1,
-            "aesdchar");
+    int result = alloc_chrdev_region(&dev, aesd_minor, 1, "aesdchar");
     aesd_major = MAJOR(dev);
     if (result < 0) {
         printk(KERN_WARNING "Can't get major %d\n", aesd_major);
         return result;
     }
-    memset(&aesd_device,0,sizeof(struct aesd_dev));
+    memset(&aesd_device, 0, sizeof(struct aesd_dev));
 
     /**
-     * TODO: initialize the AESD specific portion of the device
+     * TODO: initialize the AESD specific portion of the device  
      */
+    aesd_circular_buffer_init(&aesd_device.circbuf);
 
     result = aesd_setup_cdev(&aesd_device);
-
-    if( result ) {
+    if (result) {
         unregister_chrdev_region(dev, 1);
     }
     return result;
