@@ -82,6 +82,8 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     struct aesd_dev *dev = filp->private_data;
     struct aesd_buffer_entry *entry_ptr;
     char *entry_buf;
+    const char *replaced_entry;
+
     PDEBUG("write %zu bytes with offset %lld. Value: '%s'", count, *f_pos, buf);
     /**
      * TODO: handle write
@@ -101,7 +103,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     entry_ptr = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
     entry_ptr->buffptr = entry_buf;
     entry_ptr->size = count;
-    aesd_circular_buffer_add_entry(&dev->circbuf, entry_ptr);
+    replaced_entry = aesd_circular_buffer_add_entry(&dev->circbuf, entry_ptr);
+    /* If the circular buffer dropped the oldest entry, then free it here */
+    if (replaced_entry != NULL) {
+        kfree(replaced_entry);
+    }
     retval = count;
 
     return retval;
