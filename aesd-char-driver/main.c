@@ -17,6 +17,7 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
+#include <linux/string.h>
 #include "aesdchar.h"
 
 int aesd_major =   0; // use dynamic major
@@ -78,40 +79,55 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff_t *f_pos)
 {
-    ssize_t retval = -ENOMEM;
     struct aesd_dev *dev = filp->private_data;
-    struct aesd_buffer_entry *entry_ptr;
-    char *entry_buf;
     const char *replaced_entry;
+    char *e_ptr;
 
     PDEBUG("write %zu bytes with offset %lld. Value: '%s'", count, *f_pos, buf);
-    /**
-     * TODO: handle write
-     */
 
-    // Allocate kernel memory to hold the user data
-    entry_buf = kmalloc(count, GFP_KERNEL);
-    if (!entry_buf)
+    // Create a temp entry (krealloc behaves like kmalloc when buffptr is NULL)
+    e_ptr = krealloc(dev->tmp_entry.buffptr, dev->tmp_entry.size + count, GFP_KERNEL);
+    if (e_ptr == NULL) {
+        // If we have existing allocations then free
+        if (dev->tmp_entry.buffptr != NULL) {
+            kfree(dev->tmp_entry.buffptr);
+            dev->tmp_entry.buffptr = NULL;
+            dev->tmp_entry.size = 0;
+        }
         return -ENOMEM;
+    }
 
-    // Copy data from user space to kernel space
-    if (copy_from_user(entry_buf, buf, count)) {
-        kfree(entry_buf);
+    // Copy users write data into temp entry
+    if (copy_from_user(e_ptr + dev->tmp_entry.size, buf, count)) {
+        // If we have existing allocations then free
+        if (dev->tmp_entry.buffptr != NULL) {
+            kfree(dev->tmp_entry.buffptr);
+            dev->tmp_entry.buffptr = NULL;
+            dev->tmp_entry.size = 0;
+        }
         return -EFAULT;
     }
 
-    entry_ptr = kmalloc(sizeof(struct aesd_buffer_entry), GFP_KERNEL);
-    entry_ptr->buffptr = entry_buf;
-    entry_ptr->size = count;
-    replaced_entry = aesd_circular_buffer_add_entry(&dev->circbuf, entry_ptr);
-    /* If the circular buffer dropped the oldest entry, then free it here */
-    if (replaced_entry != NULL) {
-        kfree(replaced_entry);
-    }
-    retval = count;
+    // Update temp entry
+    dev->tmp_entry.buffptr = e_ptr;
+    dev->tmp_entry.size += count;
 
-    return retval;
+    // If there is a newline then the entry is complete, write it to the circular buffer
+    if (strchr(buf, '\n')) {
+        replaced_entry = aesd_circular_buffer_add_entry(&dev->circbuf, &dev->tmp_entry);
+        // If the circular buffer dropped the oldest entry, then free it here
+        if (replaced_entry != NULL) {
+            kfree(replaced_entry);
+        }
+
+        // Reset temp entry since circular buffer is now tracking that data
+        dev->tmp_entry.buffptr = NULL;
+        dev->tmp_entry.size = 0;
+    }
+
+    return count;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -150,6 +166,8 @@ int aesd_init_module(void)
     /**
      * TODO: initialize the AESD specific portion of the device  
      */
+    aesd_device.tmp_entry.buffptr = NULL;
+    aesd_device.tmp_entry.size = 0;
     aesd_circular_buffer_init(&aesd_device.circbuf);
 
     result = aesd_setup_cdev(&aesd_device);
