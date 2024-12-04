@@ -19,10 +19,19 @@
 #include <pthread.h>
 #include <time.h>
 
+// Default to using the aesd char kernel device
+#ifndef USE_AESD_CHAR_DEVICE
+    #define USE_AESD_CHAR_DEVICE (1)
+#endif
+
+#if (USE_AESD_CHAR_DEVICE == 0)
+#define FILENAME "/var/tmp/aesdsocketdata"
+#else
+#define FILENAME "/dev/aesdchar"
+#endif
+
 #define PORT "9000"  // the port users will be connecting to
 #define BACKLOG 10	 // how many pending connections queue will hold
-
-#define FILENAME "/var/tmp/aesdsocketdata"
 #define INITIAL_RX_BUF_SIZE 256
 
 static pthread_mutex_t _file_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -168,13 +177,17 @@ void _sig_handler(int sig)
         if (_sockfd != -1) {
             close(_sockfd);
         }
+// Only remove if were writing to a file.
+#if (USE_AESD_CHAR_DEVICE == 0)
         remove(FILENAME);
+#endif
     }
 
     errno = saved_errno;
     exit(0);
 }
 
+#if (USE_AESD_CHAR_DEVICE == 0)
 static void _timer_thread(union sigval sigval)
 {
     (void)sigval;
@@ -197,6 +210,7 @@ static void _timer_thread(union sigval sigval)
         return;
     }
 }
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -275,6 +289,8 @@ int main(int argc, char *argv[])
         }
     }
 
+// Only create timestamps if were writing to a file
+#if (USE_AESD_CHAR_DEVICE == 0)
     // Create timer after daemon since they are not preserved if called before dawmon()
     timer_t timerid;
     struct sigevent sev;
@@ -298,6 +314,7 @@ int main(int argc, char *argv[])
         timer_delete(timerid);
         return -1;
     }
+#endif
 
     struct sigaction sa;
     sa.sa_handler = _sig_handler;
@@ -308,7 +325,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+#if (USE_AESD_CHAR_DEVICE == 0)
     remove(FILENAME);
+#endif
     syslog(LOG_DEBUG, "Listening for a new connection...");
 
     SLIST_HEAD(slisthead, slist_data_s) head;
@@ -374,9 +393,11 @@ int main(int argc, char *argv[])
         }
     }
 
+#if (USE_AESD_CHAR_DEVICE == 0)
     if (timer_delete(timerid) != 0) {
         printf("Error %d (%s) deleting timer!\n", errno, strerror(errno));
     }
+#endif
 
     close(_sockfd);
     return 0;

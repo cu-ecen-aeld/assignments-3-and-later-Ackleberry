@@ -60,6 +60,8 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
     struct aesd_dev *dev = filp->private_data;
     struct aesd_buffer_entry *entry;
     size_t offset_out = 0;
+    size_t bytes_left = 0;
+    size_t copy_size = 0;
 
     PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
 
@@ -69,17 +71,23 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circbuf, *f_pos, &offset_out);
     if (entry == NULL) {
+        PDEBUG("Failed to find entry!");
         mutex_unlock(&aesd_device.mutex);
         return 0;
     }
-    mutex_unlock(&aesd_device.mutex);
 
-    PDEBUG("Reading %zu bytes. Value: '%s'", entry->size, entry->buffptr);
-	if (copy_to_user(buf, entry->buffptr, entry->size)) {
+    // Clamp the copy size if the user is requesting less
+    bytes_left = entry->size - offset_out;
+    copy_size = (bytes_left > count) ? count : bytes_left;
+
+    PDEBUG("Reading %zu bytes. offset_out: %zu", copy_size, offset_out);
+	if (copy_to_user(buf, entry->buffptr + offset_out, copy_size)) {
+        PDEBUG("Failed to copy_to_user!");
 		retval = -EFAULT;
 	}
-    *f_pos += entry->size;
-    retval = entry->size;
+    *f_pos += copy_size;
+    retval = copy_size;
+    mutex_unlock(&aesd_device.mutex);
 
     return retval;
 }
@@ -93,12 +101,15 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     PDEBUG("write %zu bytes with offset %lld. Value: '%s'", count, *f_pos, buf);
 
     if (mutex_lock_interruptible(&aesd_device.mutex)) {
+        PDEBUG("Failed to obtain lock!");
         return -ERESTARTSYS;
     }
 
     // Create a temp entry (krealloc behaves like kmalloc when buffptr is NULL)
+    PDEBUG("Allocating %zu bytes.", dev->tmp_entry.size + count);
     e_ptr = krealloc(dev->tmp_entry.buffptr, dev->tmp_entry.size + count, GFP_KERNEL);
     if (e_ptr == NULL) {
+        PDEBUG("Failed to malloc!");
         // If we have existing allocations then free
         if (dev->tmp_entry.buffptr != NULL) {
             kfree(dev->tmp_entry.buffptr);
@@ -112,6 +123,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     // Copy users write data into temp entry
     if (copy_from_user(e_ptr + dev->tmp_entry.size, buf, count)) {
         // If we have existing allocations then free
+        PDEBUG("Failed to copy_from_user!");
         if (dev->tmp_entry.buffptr != NULL) {
             kfree(dev->tmp_entry.buffptr);
             dev->tmp_entry.buffptr = NULL;
@@ -124,12 +136,14 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     // Update temp entry
     dev->tmp_entry.buffptr = e_ptr;
     dev->tmp_entry.size += count;
-
+    PDEBUG("Temp Entry stats: buffptr: %p, size: %zu", dev->tmp_entry.buffptr, dev->tmp_entry.size);
     // If there is a newline then the entry is complete, write it to the circular buffer
     if (strchr(buf, '\n')) {
+        PDEBUG("Adding new entry!");
         replaced_entry = aesd_circular_buffer_add_entry(&dev->circbuf, &dev->tmp_entry);
         // If the circular buffer dropped the oldest entry, then free it here
         if (replaced_entry != NULL) {
+            PDEBUG("Freeing old entry!");
             kfree(replaced_entry);
         }
 
@@ -181,12 +195,9 @@ int aesd_init_module(void)
      */
     memset(&aesd_device, 0, sizeof(struct aesd_dev));
     mutex_init(&aesd_device.mutex);
-
-    aesd_device.tmp_entry.buffptr = NULL;
-    aesd_device.tmp_entry.size = 0;
     aesd_circular_buffer_init(&aesd_device.circbuf);
-    result = aesd_setup_cdev(&aesd_device);
 
+    result = aesd_setup_cdev(&aesd_device);
     if (result) {
         unregister_chrdev_region(dev, 1);
     }
