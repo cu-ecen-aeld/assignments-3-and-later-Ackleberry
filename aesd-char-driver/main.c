@@ -65,16 +65,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 
     PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
 
-    if (mutex_lock_interruptible(&aesd_device.mutex)) {
+    if (mutex_lock_interruptible(&dev->mutex)) {
         return -ERESTARTSYS;
     }
 
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circbuf, *f_pos, &offset_out);
     if (entry == NULL) {
         PDEBUG("Failed to find entry!");
-        mutex_unlock(&aesd_device.mutex);
+        mutex_unlock(&dev->mutex);
         return 0;
     }
+    mutex_unlock(&dev->mutex);
 
     // Clamp the copy size if the user is requesting less
     bytes_left = entry->size - offset_out;
@@ -87,7 +88,6 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 	}
     *f_pos += copy_size;
     retval = copy_size;
-    mutex_unlock(&aesd_device.mutex);
 
     return retval;
 }
@@ -100,7 +100,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
 
     PDEBUG("write %zu bytes with offset %lld. Value: '%s'", count, *f_pos, buf);
 
-    if (mutex_lock_interruptible(&aesd_device.mutex)) {
+    if (mutex_lock_interruptible(&dev->mutex)) {
         PDEBUG("Failed to obtain lock!");
         return -ERESTARTSYS;
     }
@@ -116,7 +116,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
             dev->tmp_entry.buffptr = NULL;
             dev->tmp_entry.size = 0;
         }
-        mutex_unlock(&aesd_device.mutex);
+        mutex_unlock(&dev->mutex);
         return -ENOMEM;
     }
 
@@ -129,7 +129,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
             dev->tmp_entry.buffptr = NULL;
             dev->tmp_entry.size = 0;
         }
-        mutex_unlock(&aesd_device.mutex);
+        mutex_unlock(&dev->mutex);
         return -EFAULT;
     }
 
@@ -152,7 +152,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
         dev->tmp_entry.size = 0;
     }
 
-    mutex_unlock(&aesd_device.mutex);
+    mutex_unlock(&dev->mutex);
     return count;
 }
 
