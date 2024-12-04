@@ -63,10 +63,17 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count, loff_t *f_p
 
     PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
 
+    if (mutex_lock_interruptible(&aesd_device.mutex)) {
+        return -ERESTARTSYS;
+    }
+
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circbuf, *f_pos, &offset_out);
     if (entry == NULL) {
+        mutex_unlock(&aesd_device.mutex);
         return 0;
     }
+    mutex_unlock(&aesd_device.mutex);
+
     PDEBUG("Reading %zu bytes. Value: '%s'", entry->size, entry->buffptr);
 	if (copy_to_user(buf, entry->buffptr, entry->size)) {
 		retval = -EFAULT;
@@ -85,6 +92,10 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
 
     PDEBUG("write %zu bytes with offset %lld. Value: '%s'", count, *f_pos, buf);
 
+    if (mutex_lock_interruptible(&aesd_device.mutex)) {
+        return -ERESTARTSYS;
+    }
+
     // Create a temp entry (krealloc behaves like kmalloc when buffptr is NULL)
     e_ptr = krealloc(dev->tmp_entry.buffptr, dev->tmp_entry.size + count, GFP_KERNEL);
     if (e_ptr == NULL) {
@@ -94,6 +105,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
             dev->tmp_entry.buffptr = NULL;
             dev->tmp_entry.size = 0;
         }
+        mutex_unlock(&aesd_device.mutex);
         return -ENOMEM;
     }
 
@@ -105,6 +117,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
             dev->tmp_entry.buffptr = NULL;
             dev->tmp_entry.size = 0;
         }
+        mutex_unlock(&aesd_device.mutex);
         return -EFAULT;
     }
 
@@ -125,6 +138,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
         dev->tmp_entry.size = 0;
     }
 
+    mutex_unlock(&aesd_device.mutex);
     return count;
 }
 
@@ -161,19 +175,22 @@ int aesd_init_module(void)
         printk(KERN_WARNING "Can't get major %d\n", aesd_major);
         return result;
     }
-    memset(&aesd_device, 0, sizeof(struct aesd_dev));
 
     /**
      * TODO: initialize the AESD specific portion of the device  
      */
+    memset(&aesd_device, 0, sizeof(struct aesd_dev));
+    mutex_init(&aesd_device.mutex);
+
     aesd_device.tmp_entry.buffptr = NULL;
     aesd_device.tmp_entry.size = 0;
     aesd_circular_buffer_init(&aesd_device.circbuf);
-
     result = aesd_setup_cdev(&aesd_device);
+
     if (result) {
         unregister_chrdev_region(dev, 1);
     }
+
     return result;
 
 }
