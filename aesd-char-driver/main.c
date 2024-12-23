@@ -19,6 +19,7 @@
 #include <linux/fs.h> // file_operations
 #include <linux/string.h>
 #include "aesdchar.h"
+#include "aesd_ioctl.h"
 
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
@@ -156,10 +157,82 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
     return count;
 }
 
+/**
+ * @brief  Adjust the file offset (f_pos) parameter of @param filp based on the location specified by 
+ *         @param write_cmd (the zero referenced command to locate) and @param write_cmd_offset
+ *         (the zero referenced offset into the command)
+ * @return 0 if successful, negative if error occurred:
+ *             -ERESTARTSYS if mutex could not be obtained
+ *             -EINVAL if write command or write_cmd_offset was out of range 
+ */
+static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
+{
+    // Write command: command/data to seek to within the circular buffer, zero referenced
+    // write_cmd_offset: The zero referenced offset within this command to seek into. All offsets are specified relative to the start of the request.
+    // For instance, if the offset was 2 in the command “Grass”, the seek location should be the letter “a”
+
+    // Check for valid write_cmd and write_cmd_offset values
+        // Invalid things:
+        // When a specified command hasn't been written yet (doesn't exist in the buffer)
+        // out of range command. Our buffer only holds 10 commands (example: 11)
+        // write_cmd_offset is >= size of command
+        // If invalid then return -EINVAL
+    // Calculate the start offset to write_cmd
+        // Add the length of each write between the output pointer and write_cmd
+    // And then add write_cmd_offset to give you the total file position inside the circular buffer.
+    // Save as filp->f_pos
+    return 0;
+}
+
+long int aesd_ioctl(struct file *filp, unsigned int request, unsigned long arg)
+{
+    struct aesd_dev *dev = filp->private_data;
+    int retval = 0;
+
+    PDEBUG("aesd_ioctl: request: %ld", request);
+
+    switch (request)
+    {
+        case AESDCHAR_IOCSEEKTO:
+        {
+            PDEBUG("aesd_ioctl: AESDCHAR_IOCSEEKTO");
+            struct aesd_seekto seekto;
+            if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0) {
+                retval = EFAULT;
+            } else {
+                retval = aesd_adjust_file_offset(filp, seekto.write_cmd, seekto.write_cmd_offset);
+            }
+        }
+        break;
+        default:
+            retval = -ENOTTY;
+        break;
+    }
+
+    return retval;
+}
+
+loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
+{
+    PDEBUG("aesd_llseek: Offset: %lld, Whence: %d.", offset, whence);
+    struct aesd_dev *dev = filp->private_data;
+
+    mutex_lock(&dev->mutex);
+    loff_t tot_size = aesd_get_size_of_all_entries(&dev->circbuf);
+    PDEBUG("aesd_llseek: Total circular buffer size: %lld", tot_size);
+    loff_t ret = fixed_size_llseek(filp, offset, whence, tot_size);
+    PDEBUG("aesd_llseek: ret value: %lld", ret);
+    mutex_unlock(&dev->mutex);
+
+    return ret;
+}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
+    .unlocked_ioctl = aesd_ioctl,
+    .llseek =   aesd_llseek,
     .open =     aesd_open,
     .release =  aesd_release,
 };

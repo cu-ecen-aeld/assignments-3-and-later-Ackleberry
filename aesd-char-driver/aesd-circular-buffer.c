@@ -93,6 +93,21 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     return ret;
 }
 
+size_t aesd_get_size_of_all_entries(struct aesd_circular_buffer *buffer)
+{
+    uint8_t start = buffer->out_offs;
+    uint8_t end = buffer->in_offs;
+    size_t total_size = 0;
+
+    while (start != end) {
+        total_size += buffer->entry[start].size;
+        start++;
+        start %= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED;
+    }
+
+    return total_size;
+}
+
 /**
 * Initializes the circular buffer described by @param buffer to an empty struct
 */
