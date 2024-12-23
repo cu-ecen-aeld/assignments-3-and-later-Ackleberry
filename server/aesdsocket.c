@@ -25,9 +25,11 @@
 #endif
 
 #if (USE_AESD_CHAR_DEVICE == 0)
-#define FILENAME "/var/tmp/aesdsocketdata"
+    #define FILENAME "/var/tmp/aesdsocketdata"
 #else
-#define FILENAME "/dev/aesdchar"
+    #include "aesd_ioctl.h"
+    #include <sys/ioctl.h>
+    #define FILENAME "/dev/aesdchar"
 #endif
 
 #define PORT "9000"  // the port users will be connecting to
@@ -51,8 +53,8 @@ struct slist_data_s {
 
 int _sockfd = -1;
 
-void _send_file(int client_socket, const char *filepath) {
-
+void _send_file(int client_socket, const char *filepath) 
+{
     FILE *file = fopen(filepath, "r");
     if (file == NULL) {
         syslog(LOG_ERR, "Error opening file: '%s'\n", filepath);
@@ -140,6 +142,62 @@ int _append_str_to_file(const char *str, const char *filename) {
     return 0;
 }
 
+bool is_command(char *msg)
+{
+#if (USE_AESD_CHAR_DEVICE == 0)
+    return false;
+#else
+    bool ret = false;
+
+    if (strncmp(msg, "AESDCHAR_", strlen("AESDCHAR_")) == 0) {
+        ret = true;
+    }
+
+    return ret;
+#endif
+}
+
+int handle_command(int client_socket, char *filename, char *msg)
+{
+    if (strncmp(msg, "AESDCHAR_IOCSEEKTO:", strlen("AESDCHAR_IOCSEEKTO:")) == 0) {
+        unsigned int x, y;
+        if (sscanf(msg, "AESDCHAR_IOCSEEKTO:%d,%d", &x, &y) == 2) {
+            // Open the file
+            FILE *file = fopen(filename, "r");
+            if (file == NULL) {
+                syslog(LOG_ERR, "Error opening file: '%s'\n", filename);
+                return -1;
+            }
+            
+            // Send the IOCSEEKTO command
+            printf("X: %u, Y: %u\n", x, y);
+            struct aesd_seekto seekto;
+            seekto.write_cmd = x;
+            seekto.write_cmd_offset = y;
+            int res = ioctl(fileno(file), AESDCHAR_IOCSEEKTO, &seekto);
+
+            // Read out the content with the updated file offsets
+            char *buffer = NULL;
+            size_t bufsize = 0;
+            ssize_t line_size;
+            while ((line_size = getline(&buffer, &bufsize, file)) != -1) {
+                send(client_socket, buffer, line_size, 0);
+            }
+
+            free(buffer);
+            fclose(file);
+        } else {
+            syslog(LOG_DEBUG, "Failed to parse command!\n");
+            return -1;
+        }
+    } else {
+        syslog(LOG_DEBUG, "Unknown AESDCHAR command!\n");
+        return -1;
+    }
+
+    return 0;
+}
+
 void *_client_handler(void *arg) 
 {
     client_info_t *c_info = (client_info_t *)arg;
@@ -147,9 +205,14 @@ void *_client_handler(void *arg)
     char *msg = _receive_message(c_info->fd);
     if (msg) {
         syslog(LOG_DEBUG, "Received: '%s'\n", msg);
-        _append_str_to_file(msg, FILENAME);
+        if (is_command(msg)) {
+            syslog(LOG_DEBUG, "Message is a command!\n");
+            handle_command(c_info->fd, FILENAME, msg);
+        } else {
+            _append_str_to_file(msg, FILENAME);
+            _send_file(c_info->fd, FILENAME);
+        }
         free(msg);
-        _send_file(c_info->fd, FILENAME);
     } else {
         syslog(LOG_DEBUG, "Error receiving message\n");
     }
