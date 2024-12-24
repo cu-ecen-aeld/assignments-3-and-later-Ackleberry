@@ -93,6 +93,31 @@ const char *aesd_circular_buffer_add_entry(struct aesd_circular_buffer *buffer, 
     return ret;
 }
 
+size_t aesd_get_entry_size(struct aesd_circular_buffer *buffer, size_t entry_index)
+{
+    if (entry_index >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED) {
+        return 0;
+    }
+
+    return buffer->entry[(buffer->out_offs + entry_index) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED].size;
+}
+
+size_t aesd_get_entry_count(struct aesd_circular_buffer *buffer) 
+{
+    size_t total_size = 0;
+
+    if (buffer->in_offs > buffer->out_offs) {
+        total_size = buffer->in_offs - buffer->out_offs;
+    } else if (buffer->in_offs < buffer->out_offs) {
+        total_size = AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED - buffer->out_offs + buffer->in_offs;
+    } else {
+        /* If offsets are equal then were either full or empty */
+        total_size = (buffer->full) ? AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED : 0;
+    }
+
+    return total_size;
+}
+
 size_t aesd_get_size_of_all_entries(struct aesd_circular_buffer *buffer)
 {
     uint8_t start = buffer->out_offs;

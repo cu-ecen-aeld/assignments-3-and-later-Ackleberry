@@ -27,7 +27,7 @@
 #if (USE_AESD_CHAR_DEVICE == 0)
     #define FILENAME "/var/tmp/aesdsocketdata"
 #else
-    #include "aesd_ioctl.h"
+    #include "../aesd-char-driver/aesd_ioctl.h"
     #include <sys/ioctl.h>
     #define FILENAME "/dev/aesdchar"
 #endif
@@ -145,10 +145,10 @@ int _append_str_to_file(const char *str, const char *filename) {
 bool is_command(char *msg)
 {
 #if (USE_AESD_CHAR_DEVICE == 0)
+    syslog(LOG_DEBUG, "Commands are not suppoered.\n");
     return false;
 #else
     bool ret = false;
-
     if (strncmp(msg, "AESDCHAR_", strlen("AESDCHAR_")) == 0) {
         ret = true;
     }
@@ -170,7 +170,7 @@ int handle_command(int client_socket, char *filename, char *msg)
             }
             
             // Send the IOCSEEKTO command
-            printf("X: %u, Y: %u\n", x, y);
+            syslog(LOG_DEBUG, "X: %u, Y: %u\n", x, y);
             struct aesd_seekto seekto;
             seekto.write_cmd = x;
             seekto.write_cmd_offset = y;

@@ -158,38 +158,47 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count, loff
 }
 
 /**
- * @brief  Adjust the file offset (f_pos) parameter of @param filp based on the location specified by 
- *         @param write_cmd (the zero referenced command to locate) and @param write_cmd_offset
- *         (the zero referenced offset into the command)
+ * @brief  Adjust the file offset (f_pos) parameter within @param filp based on the location 
+ *         specified by @param write_cmd and @param write_cmd_offset.
+ * @param write_cmd  The zero referenced command/entry within the circular buffer
+ * @param write_cmd_offset  The zero referenced character within that command/entry
  * @return 0 if successful, negative if error occurred:
  *             -ERESTARTSYS if mutex could not be obtained
  *             -EINVAL if write command or write_cmd_offset was out of range 
  */
 static long aesd_adjust_file_offset(struct file *filp, unsigned int write_cmd, unsigned int write_cmd_offset)
 {
-    // Write command: command/data to seek to within the circular buffer, zero referenced
-    // write_cmd_offset: The zero referenced offset within this command to seek into. All offsets are specified relative to the start of the request.
-    // For instance, if the offset was 2 in the command “Grass”, the seek location should be the letter “a”
+    struct aesd_dev *dev = filp->private_data;
 
     // Check for valid write_cmd and write_cmd_offset values
-        // Invalid things:
-        // When a specified command hasn't been written yet (doesn't exist in the buffer)
-        // out of range command. Our buffer only holds 10 commands (example: 11)
-        // write_cmd_offset is >= size of command
-        // If invalid then return -EINVAL
-    // Calculate the start offset to write_cmd
-        // Add the length of each write between the output pointer and write_cmd
-    // And then add write_cmd_offset to give you the total file position inside the circular buffer.
-    // Save as filp->f_pos
+    size_t total_entries = aesd_get_entry_count(&dev->circbuf);
+    if (write_cmd >= total_entries) {
+        PDEBUG("write_cmd index is too large! write_cmd: %u, total_entries: %zu", write_cmd, total_entries);
+        return -EINVAL;
+    }
+
+    size_t entry_size = aesd_get_entry_size(&dev->circbuf, write_cmd);
+    if (write_cmd_offset > entry_size) {
+        PDEBUG("write_cmd_offset index is too large! write_cmd_offset: %u, entry_size: %zu", write_cmd_offset, entry_size);
+        return -EINVAL;
+    }
+
+    // Add up all entry sizes up to the desired write cmd index
+    size_t offset = 0;
+    for (int i = 0; i < write_cmd; i++) {
+        offset += aesd_get_entry_size(&dev->circbuf, i);
+    }
+
+    // Now offset is at write_cmd index, add the remaining write_cmd_offset index
+    filp->f_pos = offset + write_cmd_offset;
     return 0;
 }
 
 long int aesd_ioctl(struct file *filp, unsigned int request, unsigned long arg)
 {
-    struct aesd_dev *dev = filp->private_data;
     int retval = 0;
-
-    PDEBUG("aesd_ioctl: request: %ld", request);
+    struct aesd_dev *dev = filp->private_data;
+    PDEBUG("aesd_ioctl: request: %u", request);
 
     switch (request)
     {
@@ -214,8 +223,8 @@ long int aesd_ioctl(struct file *filp, unsigned int request, unsigned long arg)
 
 loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
 {
-    PDEBUG("aesd_llseek: Offset: %lld, Whence: %d.", offset, whence);
     struct aesd_dev *dev = filp->private_data;
+    PDEBUG("aesd_llseek: Offset: %lld, Whence: %d.", offset, whence);
 
     mutex_lock(&dev->mutex);
     loff_t tot_size = aesd_get_size_of_all_entries(&dev->circbuf);
